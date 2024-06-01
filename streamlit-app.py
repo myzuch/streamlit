@@ -63,7 +63,7 @@ if st.button("Summarize"):
             wrapped_summary = f'<span class="sentence" ref="1">{summary}</span>\n<span class="sentence" ref="2">{summarize_text(text, selected_sections)}</span>'
             wrapped_text = f'<span class="chunk" id="1">{text}</span>\n<span class="chunk" id="2">{text}</span>'
 
-            html_code = get_html_page(summary, wrapped_text)
+            html_code = get_html_page(wrapped_summary, wrapped_text)
             st.components.v1.html(html_code, height=600)
         else:
             st.warning("Please select at least one section to include in the summary.")
