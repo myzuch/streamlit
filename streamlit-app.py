@@ -1,27 +1,11 @@
 import streamlit as st
 import PyPDF2
-import time
+from dotenv import load_dotenv
+from utils import *
 
+load_dotenv()
 
-def summarize_text(input_text, sections):
-    summary = f"Summary for sections: {', '.join(sections)}"
-    return summary
-
-def get_html_page(summary, input_text):
-    with open("styles.css", "r") as css_file:
-        css_code = css_file.read()
-
-    with open("script.js", "r") as js_file:
-        js_code = js_file.read()
-
-    with open("index.html", "r") as html_file:
-        html_page = html_file.read()
-
-    return html_page.format(summary=summary, input_text=input_text,
-                            js_code=js_code, css_code=css_code)
-
-
-sections = ['Subject & demographics', 'Allergies', 'Medications', 'Problems', 'Author of transaction']
+sections = ['Social History', 'Allergies', 'Medications', 'Problems', 'Author of transaction']
 
 if "text" not in st.session_state:
     st.session_state.text = ""
@@ -58,13 +42,10 @@ if st.button("Summarize"):
         text = st.session_state.text
         if selected_sections:
             # if not st.session_state.summary:
-            time.sleep(3)
-            summary = summarize_text(text, selected_sections)
-            wrapped_summary = f'<span class="sentence" ref="1">{summary}</span>\n<span class="sentence" ref="2">{summarize_text(text, selected_sections)}</span>'
-            wrapped_text = f'<span class="chunk" id="1">{text}</span>\n<span class="chunk" id="2">{text}</span>'
+            wrapped_summary, wrapped_text = get_summary_and_text(text, selected_sections)
 
-            html_code = get_html_page(wrapped_summary, wrapped_text)
-            st.components.v1.html(html_code, height=600)
+            html_code = get_text_display_html(wrapped_summary, wrapped_text)
+            st.components.v1.html(html_code, height=600, width=800)
         else:
             st.warning("Please select at least one section to include in the summary.")
     else:
