@@ -1,10 +1,17 @@
 from typing import Dict, List
 from bs4 import BeautifulSoup
-import regex as re
-from langchain_openai import ChatOpenAI
+import re
+import streamlit as st
 from markdown import markdown
-from prompts import SYSTEM_PROMPT
+from chains import *
+from sentence_transformers import util
 
+@st.cache_data(show_spinner=False)
+def get_summary_and_text(input_text, sections, embed_model=None):
+    html_summary = markdown(get_summary(input_text, sections))
+    input_sentences = input_text.split("\n")
+
+    return match_li_to_sentences(html_summary, input_sentences, embed_model)
 
 def get_text_display_html(summary, input_text):
     with open("text-display/styles.css", "r") as css_file:
@@ -16,27 +23,12 @@ def get_text_display_html(summary, input_text):
     with open("text-display/index.html", "r") as html_file:
         html_page = html_file.read()
 
-    return html_page.format(summary=summary, input_text=input_text,
-                            js_code=js_code, css_code=css_code)
+    return html_page.format(
+        summary=summary, input_text=input_text, js_code=js_code, css_code=css_code
+    )
 
 
-def get_summary_and_text(input_text, sections, model='gpt-3.5-turbo', embed_model=None):
-    llm = ChatOpenAI(temperature=0, model=model)
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(sections=str(sections).strip('[]'),
-                                                           num_sections=len(sections))},
-        {"role": "user", "content": f"Summarise the following note: \n{input_text}"},
-    ]
-
-    summary = llm.invoke(messages).content
-    html_summary = markdown(summary)
-    input_sentences = input_text.split('\n')
-    
-    return match_li_to_sentences(html_summary, input_sentences, embed_model)
-
-
-def get_top_matches(sents_a: list[str], sents_b: list[str]) -> list[list[int]]:
+def get_top_matches(sents_a: list[str], sents_b: list[str], embed_model=st.session_state.embed_model) -> list[list[int]]:
     """
     Return a list of lists with indexes of sentences from `sents_b`
     that contain `sents_a`.
@@ -46,26 +38,55 @@ def get_top_matches(sents_a: list[str], sents_b: list[str]) -> list[list[int]]:
     for i, sent_a in enumerate(sents_a):
         matches = []
         for j, sent_b in enumerate(sents_b):
-            match = re.search(r'(?i)' + re.escape(sent_a), sent_b)
+            match = re.search(r"(?i)" + re.escape(sent_a), sent_b)
             if match:
-                indices = match.start(), match.end()
-                matches.append((j, indices))
+                matches.append(j)
         if not matches:
-            matches.append((-1, (-1, -1)))
+            matches.append(-1)
             regex_matches.append(matches)
         else:
             regex_matches.append(matches)
 
+    if embed_model:
+        emb_a, emb_b = embed_model.encode(sents_a), embed_model.encode(sents_b) 
+        cos_matches = get_cosine_matches(emb_a, emb_b, top_k=1)
+        for i in range(len(regex_matches)):
+            if regex_matches[i] == [-1]:
+                regex_matches[i] = cos_matches[i]
+                
     assert len(regex_matches) == len(sents_a)
     return regex_matches
 
 
+def get_cosine_matches(emb_a, emb_b, top_k=3):
+    """
+    Find the top `k` most similar elements between two sets of embeddings based on cosine similarity.
+
+    Args:
+        emb_a (2D array-like): A set of embeddings.
+        emb_b (2D array-like): Another set of embeddings.
+        top_k (int, optional): The number of top matches to return for each element in `emb_a`. Defaults to 3.
+
+    Returns:
+        list: A list of lists, where each inner list contains the indices of the top `k` most similar elements in `emb_b` for the corresponding element in `emb_a`.
+    """
+    scores = util.cos_sim(emb_a, emb_b)
+
+    all_matches = []
+    for row in scores:
+        matches = [(j, score) for j, score in enumerate(row)]  # if score >= threshold]
+        matches = sorted(matches, key=lambda x: x[1], reverse=True)
+        matches = [(x[0]) for x in matches[:top_k]]
+        all_matches.append(matches)
+    return all_matches
+
+
 def wrap_input_text_sentences(text_sentences: str) -> str:
     """Wraps each sentence in the original text with <span class="chunk" id="...">"""
-    original_text_html = ''
+    original_text_html = ""
     for i, sentence in enumerate(text_sentences):
         begin_tag = f'<span class="chunk" id="{i}">'
-        end_tag = '</span>'
+        end_tag = "</span>"
         original_text_html += f"{begin_tag}{sentence}{end_tag}"
     return original_text_html
 
@@ -84,26 +105,19 @@ def match_li_to_sentences(html_summary, text_sentences, embed_model, threshold=0
     Returns:
         Tuple[str, str]: The processed HTML summary and the original text with sentences wrapped in <span> tags.
     """
-    soup = BeautifulSoup(html_summary, 'html.parser')
-    li_elements = soup.find_all('li')
+    soup = BeautifulSoup(html_summary, "html.parser")
+    li_elements = soup.find_all("li")
     summary_elements = [x.get_text() for x in li_elements]
     references = get_top_matches(summary_elements, text_sentences)
     # Wrap each <li> element with <span class="sentence" ref="...">
     for i, li in enumerate(li_elements):
-        ref_indices_with_ranges = references[i]
-        span_tag = soup.new_tag('span', attrs={'class': 'sentence'})
+        ref_indices = references[i]
+        span_tag = soup.new_tag("span", attrs={"class": "sentence"})
         if li.get_text():
             span_tag.string = li.get_text()
-            ref_attrs = ' '.join([f"{idx}" for idx, (start, end) in ref_indices_with_ranges])
-            span_tag['ref'] = ref_attrs
+            ref_attrs = " ".join([f"{idx}" for idx in ref_indices])
+            span_tag["ref"] = ref_attrs
             li.contents = []
             li.append(span_tag)
-    
+
     return str(soup), wrap_input_text_sentences(text_sentences)
-
-
-def starts_with_any(line, prefixes):
-    for prefix in prefixes[::-1]:
-        if line.startswith(prefix):
-            return prefix
-    return False
